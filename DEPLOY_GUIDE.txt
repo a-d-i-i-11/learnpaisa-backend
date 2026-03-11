@@ -1,0 +1,70 @@
+╔══════════════════════════════════════════════════════════════╗
+║     LEARNPAISA BACKEND — DEPLOY ON RENDER (FREE!)           ║
+╚══════════════════════════════════════════════════════════════╝
+
+STEP 1 — GITHUB (5 min)
+━━━━━━━━━━━━━━━━━━━━━━━
+1. Go to github.com → Sign up free
+2. Click "New Repository"
+3. Name it: learnpaisa-backend
+4. Upload all these files
+5. Click "Commit changes"
+
+STEP 2 — MONGODB ATLAS (5 min, FREE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Go to mongodb.com/atlas → Sign up free
+2. Create FREE cluster (M0 — always free!)
+3. Create database user (save password!)
+4. Get connection string — looks like:
+   mongodb+srv://username:password@cluster.xxxxx.mongodb.net/learnpaisa
+5. Save this — you need it for Render!
+
+STEP 3 — RENDER (5 min, FREE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Go to render.com → Sign up with GitHub
+2. Click "New Web Service"
+3. Connect your GitHub repo
+4. Settings:
+   - Name: learnpaisa-backend
+   - Build Command: npm install
+   - Start Command: npm start
+5. Add Environment Variables:
+   MONGODB_URI = (paste from MongoDB Atlas)
+   JWT_SECRET  = learnpaisa_super_secret_2025
+   RAZORPAY_KEY_ID = (from razorpay.com)
+   RAZORPAY_KEY_SECRET = (from razorpay.com)
+   ADMIN_PASSWORD = (your secret admin password)
+6. Click "Create Web Service"
+7. Wait 3 min → Your backend is LIVE! 🎉
+
+YOUR API WILL BE AT:
+https://learnpaisa-backend.onrender.com
+
+STEP 4 — RAZORPAY (10 min, FREE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Go to razorpay.com → Sign up
+2. Dashboard → Settings → API Keys
+3. Generate Test Keys first
+4. Copy Key ID and Key Secret
+5. Add to Render environment variables
+6. Test with card: 4111 1111 1111 1111
+
+STEP 5 — CONNECT FRONTEND TO BACKEND
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Add this to your HTML files:
+const API = 'https://learnpaisa-backend.onrender.com/api';
+
+Then fetch data like:
+fetch(`${API}/auth/send-otp`, {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({ phone: '9876543210' })
+})
+
+TOTAL COST: ₹0 to start! 🎉
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- GitHub: FREE
+- MongoDB Atlas M0: FREE
+- Render: FREE
+- Razorpay: FREE (they charge % only when you earn!)
+
