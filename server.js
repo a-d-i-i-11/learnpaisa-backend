@@ -133,22 +133,24 @@ app.post('/api/auth/send-otp', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Enter valid 10-digit phone number' });
     }
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpStore[phone] = { otp, expiresAt: Date.now() + 5 * 60 * 1000 };
+    otpStore[phone] = { otp, expiresAt: Date.now() + 10 * 60 * 1000 };
     console.log(`OTP for ${phone}: ${otp}`);
 
-  const TWOFACTOR_KEY = process.env.TWOFACTOR_KEY;
-if (TWOFACTOR_KEY) {
-  try {
-    const smsRes = await fetch(`https://2factor.in/API/V1/${TWOFACTOR_KEY}/SMS/${phone}/${otp}/OTP1`);
-    const smsData = await smsRes.json();
-    console.log('SMS Result:', smsData);
-    if (smsData.Status === 'Success') {
-      return res.json({ success: true, message: '📱 OTP sent to your phone!' });
+    const TWOFACTOR_KEY = process.env.TWOFACTOR_KEY;
+    if (TWOFACTOR_KEY) {
+      try {
+        const smsRes = await fetch(`https://2factor.in/API/V1/${TWOFACTOR_KEY}/SMS/+91${phone}/${otp}/OTP1`);
+        const smsData = await smsRes.json();
+        console.log('SMS Result:', smsData);
+        if (smsData.Status === 'Success') {
+          return res.json({ success: true, message: '📱 OTP sent to your phone!' });
+        } else {
+          console.log('SMS failed:', smsData.Details);
+        }
+      } catch (smsErr) {
+        console.log('SMS error:', smsErr.message);
+      }
     }
-  } catch (smsErr) {
-    console.log('SMS error:', smsErr.message);
-  }
-}
     res.json({ success: true, message: 'OTP sent!', ...(process.env.NODE_ENV !== 'production' && { otp }) });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to send OTP' });
