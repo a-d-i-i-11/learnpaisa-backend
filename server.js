@@ -17,18 +17,10 @@ const JWT_SECRET     = process.env.JWT_SECRET     || 'learnpaisa_secret_2025';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const MONGODB_URI    = process.env.MONGODB_URI    || 'mongodb://localhost:27017/learnpaisa';
 
-// ════════════════════════════════════════
-//  DATABASE CONNECTION
-// ════════════════════════════════════════
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('✅ MongoDB connected!'))
   .catch(err => console.log('❌ DB Error:', err.message));
 
-// ════════════════════════════════════════
-//  MODELS
-// ════════════════════════════════════════
-
-// USER MODEL
 const UserSchema = new mongoose.Schema({
   name:         { type: String, required: true, trim: true },
   phone:        { type: String, required: true, unique: true },
@@ -70,31 +62,29 @@ UserSchema.pre('save', function(next) {
 });
 const User = mongoose.model('User', UserSchema);
 
-// MATCH MODEL
 const MatchSchema = new mongoose.Schema({
-  game:     { type: String, enum: ['ludo','chess','carrom','livetask'], required: true },
-  mode:     { type: String, default: '1v1' },
-  status:   { type: String, enum: ['waiting','active','completed','cancelled'], default: 'waiting' },
-  players:  [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, isWinner: { type: Boolean, default: false } }],
-  entryFee: { type: Number, required: true },
-  prizePool:{ type: Number },
+  game:      { type: String, enum: ['ludo','chess','carrom','livetask'], required: true },
+  mode:      { type: String, default: '1v1' },
+  status:    { type: String, enum: ['waiting','active','completed','cancelled'], default: 'waiting' },
+  players:   [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, isWinner: { type: Boolean, default: false } }],
+  entryFee:  { type: Number, required: true },
+  prizePool: { type: Number },
   commission:{ type: Number },
-  winner:   { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  startedAt:{ type: Date },
-  endedAt:  { type: Date },
-  createdAt:{ type: Date, default: Date.now }
+  winner:    { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  startedAt: { type: Date },
+  endedAt:   { type: Date },
+  createdAt: { type: Date, default: Date.now }
 });
 MatchSchema.pre('save', function(next) {
   if (this.players.length > 0) {
-    const total = this.entryFee * this.players.length;
-    this.prizePool    = Math.round(total * 0.85);
-    this.commission   = Math.round(total * 0.15);
+    const total    = this.entryFee * this.players.length;
+    this.prizePool = Math.round(total * 0.85);
+    this.commission= Math.round(total * 0.15);
   }
   next();
 });
 const Match = mongoose.model('Match', MatchSchema);
 
-// TRANSACTION MODEL
 const TransactionSchema = new mongoose.Schema({
   user:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   type:       { type: String, enum: ['deposit','withdrawal','winning','loss','bonus','refund'], required: true },
@@ -110,9 +100,6 @@ const TransactionSchema = new mongoose.Schema({
 });
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 
-// ════════════════════════════════════════
-//  MIDDLEWARE
-// ════════════════════════════════════════
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ success: false, message: 'Login required' });
@@ -137,16 +124,8 @@ function adminAuth(req, res, next) {
   }
 }
 
-// ════════════════════════════════════════
-//  OTP STORE (temporary in memory)
-// ════════════════════════════════════════
 const otpStore = {};
 
-// ════════════════════════════════════════
-//  AUTH ROUTES
-// ════════════════════════════════════════
-
-// Send OTP
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { phone } = req.body;
@@ -156,17 +135,30 @@ app.post('/api/auth/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     otpStore[phone] = { otp, expiresAt: Date.now() + 5 * 60 * 1000 };
     console.log(`OTP for ${phone}: ${otp}`);
-    res.json({
-      success: true,
-      message: 'OTP sent!',
-      ...(process.env.NODE_ENV !== 'production' && { otp })
-    });
+
+    const FAST2SMS_KEY = process.env.FAST2SMS_KEY;
+    if (FAST2SMS_KEY) {
+      try {
+        const smsRes = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+          method: 'POST',
+          headers: { 'authorization': FAST2SMS_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ route: 'otp', variables_values: otp, numbers: phone })
+        });
+        const smsData = await smsRes.json();
+        console.log('SMS Result:', smsData);
+        if (smsData.return === true) {
+          return res.json({ success: true, message: '📱 OTP sent to your phone!' });
+        }
+      } catch (smsErr) {
+        console.log('SMS error:', smsErr.message);
+      }
+    }
+    res.json({ success: true, message: 'OTP sent!', ...(process.env.NODE_ENV !== 'production' && { otp }) });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to send OTP' });
   }
 });
 
-// Verify OTP
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
     const { phone, otp, name, referralCode } = req.body;
@@ -175,14 +167,11 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       delete otpStore[phone];
       return res.status(400).json({ success: false, message: 'OTP expired. Request again.' });
     }
-    if (stored.otp !== otp) {
-      return res.status(400).json({ success: false, message: 'Wrong OTP!' });
-    }
+    if (stored.otp !== otp) return res.status(400).json({ success: false, message: 'Wrong OTP!' });
     delete otpStore[phone];
 
     let user = await User.findOne({ phone });
     let isNewUser = false;
-
     if (!user) {
       if (!name) return res.status(400).json({ success: false, message: 'Name required' });
       let referredBy = null;
@@ -199,12 +188,9 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       await user.save();
       isNewUser = true;
     }
-
     user.lastLogin = new Date();
     await user.save();
-
     const token = jwt.sign({ userId: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '30d' });
-
     res.json({
       success: true,
       message: isNewUser ? `Welcome ${user.name}! 🎉 ₹50 bonus added!` : `Welcome back ${user.name}!`,
@@ -216,7 +202,6 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   }
 });
 
-// Get my profile
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId).select('-__v');
@@ -227,19 +212,11 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════
-//  WALLET ROUTES
-// ════════════════════════════════════════
-
-// Create Razorpay order
 app.post('/api/wallet/create-order', authMiddleware, async (req, res) => {
   try {
     const { amount } = req.body;
     if (!amount || amount < 10) return res.status(400).json({ success: false, message: 'Minimum ₹10' });
-    const razorpay = new Razorpay({
-      key_id:     process.env.RAZORPAY_KEY_ID     || 'rzp_test_demo',
-      key_secret: process.env.RAZORPAY_KEY_SECRET || 'demo'
-    });
+    const razorpay = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_demo', key_secret: process.env.RAZORPAY_KEY_SECRET || 'demo' });
     const order = await razorpay.orders.create({ amount: amount * 100, currency: 'INR', receipt: `lp_${Date.now()}` });
     res.json({ success: true, order, key: process.env.RAZORPAY_KEY_ID });
   } catch (err) {
@@ -247,14 +224,11 @@ app.post('/api/wallet/create-order', authMiddleware, async (req, res) => {
   }
 });
 
-// Verify payment
 app.post('/api/wallet/verify-payment', authMiddleware, async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount } = req.body;
-    const body = razorpay_order_id + '|' + razorpay_payment_id;
-    const expectedSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'demo').update(body).digest('hex');
+    const expectedSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'demo').update(razorpay_order_id+'|'+razorpay_payment_id).digest('hex');
     if (expectedSig !== razorpay_signature) return res.status(400).json({ success: false, message: 'Payment verification failed!' });
-
     const user = await User.findById(req.userId);
     const depositAmt = parseInt(amount);
     let bonus = 0;
@@ -262,33 +236,27 @@ app.post('/api/wallet/verify-payment', authMiddleware, async (req, res) => {
     else if (depositAmt >= 1000) bonus = Math.round(depositAmt * 0.25);
     else if (depositAmt >= 500)  bonus = Math.round(depositAmt * 0.20);
     else if (depositAmt >= 200)  bonus = 50;
-
     user.wallet.deposit += depositAmt;
     user.wallet.bonus   += bonus;
     user.wallet.total   += depositAmt + bonus;
     await user.save();
-
     await Transaction.create({ user: req.userId, type: 'deposit', amount: depositAmt, status: 'completed', razorpayId: razorpay_payment_id });
-
     res.json({ success: true, message: `₹${depositAmt} added!${bonus > 0 ? ` + ₹${bonus} bonus! 🎉` : ''}`, newBalance: user.wallet.total });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Withdraw
 app.post('/api/wallet/withdraw', authMiddleware, async (req, res) => {
   try {
     const { amount, method, upiId } = req.body;
     const user = await User.findById(req.userId);
     if (amount < 100) return res.status(400).json({ success: false, message: 'Minimum withdrawal ₹100' });
-    if (amount > user.wallet.winnings) return res.status(400).json({ success: false, message: `Only winnings can be withdrawn` });
+    if (amount > user.wallet.winnings) return res.status(400).json({ success: false, message: 'Only winnings can be withdrawn' });
     if (!user.kyc.verified) return res.status(400).json({ success: false, message: 'Complete KYC first!' });
-
     user.wallet.winnings -= amount;
     user.wallet.total    -= amount;
     await user.save();
-
     await Transaction.create({ user: req.userId, type: 'withdrawal', amount, status: 'pending', method, upiId });
     res.json({ success: true, message: 'Withdrawal request submitted! Processing in 30min - 24hrs.' });
   } catch (err) {
@@ -296,7 +264,6 @@ app.post('/api/wallet/withdraw', authMiddleware, async (req, res) => {
   }
 });
 
-// Get transactions
 app.get('/api/wallet/transactions', authMiddleware, async (req, res) => {
   try {
     const txns = await Transaction.find({ user: req.userId }).sort({ createdAt: -1 }).limit(50);
@@ -306,31 +273,21 @@ app.get('/api/wallet/transactions', authMiddleware, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════
-//  MATCH ROUTES
-// ════════════════════════════════════════
-
-// Find / create match
 app.post('/api/match/find', authMiddleware, async (req, res) => {
   try {
     const { game, entryFee } = req.body;
     const user = await User.findById(req.userId);
     if (user.wallet.total < entryFee) return res.status(400).json({ success: false, message: `Need ₹${entryFee} to play!` });
-
     let match = await Match.findOne({ game, entryFee, status: 'waiting', 'players.user': { $ne: req.userId } });
-
     if (match) {
       match.players.push({ user: req.userId });
-      match.status    = 'active';
+      match.status = 'active';
       match.startedAt = new Date();
       await match.save();
-
-      // Deduct fees
       for (const p of match.players) {
         await User.findByIdAndUpdate(p.user, { $inc: { 'wallet.total': -entryFee } });
         await Transaction.create({ user: p.user, type: 'loss', amount: entryFee, status: 'completed', match: match._id, note: 'Entry fee' });
       }
-
       return res.json({ success: true, message: '🎮 Opponent found! Match starting!', match: { id: match._id, status: 'active', prizePool: match.prizePool } });
     } else {
       match = await Match.create({ game, entryFee, players: [{ user: req.userId }], status: 'waiting' });
@@ -341,38 +298,30 @@ app.post('/api/match/find', authMiddleware, async (req, res) => {
   }
 });
 
-// Declare winner
 app.post('/api/match/result', authMiddleware, async (req, res) => {
   try {
     const { matchId, winnerId } = req.body;
     const match = await Match.findById(matchId);
     if (!match || match.status !== 'active') return res.status(400).json({ success: false, message: 'Match not found' });
-
-    match.status  = 'completed';
-    match.winner  = winnerId;
-    match.endedAt = new Date();
+    match.status = 'completed'; match.winner = winnerId; match.endedAt = new Date();
     await match.save();
-
     const winner = await User.findById(winnerId);
     winner.wallet.winnings += match.prizePool;
     winner.wallet.total    += match.prizePool;
     winner.stats.matchesWon++;
     winner.stats.matchesPlayed++;
-    winner.stats.totalEarned   += match.prizePool;
+    winner.stats.totalEarned += match.prizePool;
     winner.stats.currentStreak++;
     winner.stats.xp    += match.entryFee * 2;
     winner.stats.level  = Math.floor(winner.stats.xp / 500) + 1;
     await winner.save();
-
     await Transaction.create({ user: winnerId, type: 'winning', amount: match.prizePool, status: 'completed', match: matchId });
-
     res.json({ success: true, message: `🏆 ₹${match.prizePool} credited to winner!` });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Match history
 app.get('/api/match/history', authMiddleware, async (req, res) => {
   try {
     const matches = await Match.find({ 'players.user': req.userId, status: 'completed' })
@@ -384,11 +333,6 @@ app.get('/api/match/history', authMiddleware, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════
-//  ADMIN ROUTES
-// ════════════════════════════════════════
-
-// Admin login
 app.post('/api/admin/login', (req, res) => {
   const { password } = req.body;
   if (password !== ADMIN_PASSWORD) return res.status(401).json({ success: false, message: 'Wrong password!' });
@@ -396,7 +340,6 @@ app.post('/api/admin/login', (req, res) => {
   res.json({ success: true, token, message: 'Welcome Boss! 👑' });
 });
 
-// Dashboard stats
 app.get('/api/admin/stats', adminAuth, async (req, res) => {
   try {
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
@@ -413,7 +356,6 @@ app.get('/api/admin/stats', adminAuth, async (req, res) => {
   }
 });
 
-// Get users
 app.get('/api/admin/users', adminAuth, async (req, res) => {
   try {
     const { search } = req.query;
@@ -425,7 +367,6 @@ app.get('/api/admin/users', adminAuth, async (req, res) => {
   }
 });
 
-// Ban/Unban user
 app.post('/api/admin/users/:id/ban', adminAuth, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -439,7 +380,6 @@ app.post('/api/admin/users/:id/ban', adminAuth, async (req, res) => {
   }
 });
 
-// Get withdrawals
 app.get('/api/admin/withdrawals', adminAuth, async (req, res) => {
   try {
     const withdrawals = await Transaction.find({ type: 'withdrawal', status: 'pending' }).populate('user', 'name phone').sort({ createdAt: 1 });
@@ -449,7 +389,6 @@ app.get('/api/admin/withdrawals', adminAuth, async (req, res) => {
   }
 });
 
-// Approve withdrawal
 app.post('/api/admin/withdrawals/:id/approve', adminAuth, async (req, res) => {
   try {
     const txn = await Transaction.findById(req.params.id).populate('user');
@@ -463,7 +402,6 @@ app.post('/api/admin/withdrawals/:id/approve', adminAuth, async (req, res) => {
   }
 });
 
-// Reject withdrawal
 app.post('/api/admin/withdrawals/:id/reject', adminAuth, async (req, res) => {
   try {
     const txn = await Transaction.findById(req.params.id).populate('user');
@@ -477,27 +415,9 @@ app.post('/api/admin/withdrawals/:id/reject', adminAuth, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════
-//  HEALTH CHECK
-// ════════════════════════════════════════
 app.get('/', (req, res) => {
-  res.json({
-    app: '🎮 LearnPaisa Backend',
-    status: '✅ Running!',
-    version: '1.0.0',
-    endpoints: {
-      auth:   'POST /api/auth/send-otp  |  POST /api/auth/verify-otp  |  GET /api/auth/me',
-      wallet: 'POST /api/wallet/create-order  |  POST /api/wallet/withdraw  |  GET /api/wallet/transactions',
-      match:  'POST /api/match/find  |  POST /api/match/result  |  GET /api/match/history',
-      admin:  'POST /api/admin/login  |  GET /api/admin/stats  |  GET /api/admin/users'
-    }
-  });
+  res.json({ app: '🎮 LearnPaisa Backend', status: '✅ Running!', version: '1.0.0' });
 });
 
-// ════════════════════════════════════════
-//  START SERVER
-// ════════════════════════════════════════
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 LearnPaisa Backend running on port ${PORT}`);
-});
+app.listen(PORT, () => { console.log(`🚀 LearnPaisa Backend running on port ${PORT}`); });
