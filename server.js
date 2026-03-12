@@ -21,6 +21,14 @@ mongoose.connect(MONGODB_URI)
   .then(() => console.log('✅ MongoDB connected!'))
   .catch(err => console.log('❌ DB Error:', err.message));
 
+// ── OTP stored in MongoDB (survives Render sleep!) ──
+const OtpSchema = new mongoose.Schema({
+  phone:     { type: String, required: true, unique: true },
+  otp:       { type: String, required: true },
+  expiresAt: { type: Date, required: true }
+});
+const Otp = mongoose.model('Otp', OtpSchema);
+
 const UserSchema = new mongoose.Schema({
   name:         { type: String, required: true, trim: true },
   phone:        { type: String, required: true, unique: true },
@@ -124,8 +132,7 @@ function adminAuth(req, res, next) {
   }
 }
 
-const otpStore = {};
-
+// ── SEND OTP ──
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { phone } = req.body;
@@ -133,15 +140,24 @@ app.post('/api/auth/send-otp', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Enter valid 10-digit phone number' });
     }
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpStore[phone] = { otp, expiresAt: Date.now() + 10 * 60 * 1000 };
+
+    // Save OTP in MongoDB (not memory — survives server sleep!)
+    await Otp.findOneAndUpdate(
+      { phone },
+      { otp, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
+      { upsert: true, new: true }
+    );
     console.log(`OTP for ${phone}: ${otp}`);
 
+    // Send SMS via 2Factor
     const TWOFACTOR_KEY = process.env.TWOFACTOR_KEY;
     if (TWOFACTOR_KEY) {
       try {
-        const smsRes = await fetch(`https://2factor.in/API/V1/${TWOFACTOR_KEY}/SMS/+91${phone}/${otp}/OTP1`);
+        // TRANS route = SMS (not call!)
+        const smsUrl = `https://2factor.in/API/V1/${TWOFACTOR_KEY}/SMS/+91${phone}/${otp}`;
+        const smsRes = await fetch(smsUrl);
         const smsData = await smsRes.json();
-        console.log('SMS Result:', smsData);
+        console.log('SMS Result:', JSON.stringify(smsData));
         if (smsData.Status === 'Success') {
           return res.json({ success: true, message: '📱 OTP sent to your phone!' });
         } else {
@@ -151,27 +167,39 @@ app.post('/api/auth/send-otp', async (req, res) => {
         console.log('SMS error:', smsErr.message);
       }
     }
-    res.json({ success: true, message: 'OTP sent!', ...(process.env.NODE_ENV !== 'production' && { otp }) });
+    // Fallback — show OTP in response for testing
+    res.json({ success: true, message: 'OTP sent!', otp });
   } catch (err) {
+    console.log('Send OTP error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to send OTP' });
   }
 });
 
+// ── VERIFY OTP ──
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
     const { phone, otp, name, referralCode } = req.body;
-    const stored = otpStore[phone];
-    if (!stored || Date.now() > stored.expiresAt) {
-      delete otpStore[phone];
+
+    // Get OTP from MongoDB
+    const stored = await Otp.findOne({ phone });
+    if (!stored) {
+      return res.status(400).json({ success: false, message: 'OTP not found. Request again.' });
+    }
+    if (new Date() > stored.expiresAt) {
+      await Otp.deleteOne({ phone });
       return res.status(400).json({ success: false, message: 'OTP expired. Request again.' });
     }
-    if (stored.otp !== otp) return res.status(400).json({ success: false, message: 'Wrong OTP!' });
-    delete otpStore[phone];
+    if (stored.otp !== otp.toString()) {
+      return res.status(400).json({ success: false, message: 'Wrong OTP! Try again.' });
+    }
+
+    // OTP correct — delete it
+    await Otp.deleteOne({ phone });
 
     let user = await User.findOne({ phone });
     let isNewUser = false;
     if (!user) {
-      if (!name) return res.status(400).json({ success: false, message: 'Name required' });
+      if (!name) return res.status(400).json({ success: false, message: 'Name required for signup' });
       let referredBy = null;
       if (referralCode) {
         const referrer = await User.findOne({ referralCode });
@@ -188,6 +216,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     }
     user.lastLogin = new Date();
     await user.save();
+
     const token = jwt.sign({ userId: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '30d' });
     res.json({
       success: true,
@@ -196,7 +225,8 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       user: { id: user._id, name: user.name, phone: user.phone, wallet: user.wallet, stats: user.stats, referralCode: user.referralCode }
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.log('Verify OTP error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
