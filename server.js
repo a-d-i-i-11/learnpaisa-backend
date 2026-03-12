@@ -136,23 +136,19 @@ app.post('/api/auth/send-otp', async (req, res) => {
     otpStore[phone] = { otp, expiresAt: Date.now() + 5 * 60 * 1000 };
     console.log(`OTP for ${phone}: ${otp}`);
 
-    const FAST2SMS_KEY = process.env.FAST2SMS_KEY;
-    if (FAST2SMS_KEY) {
-      try {
-        const smsRes = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-          method: 'POST',
-          headers: { 'authorization': FAST2SMS_KEY, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ route: 'otp', variables_values: otp, numbers: phone })
-        });
-        const smsData = await smsRes.json();
-        console.log('SMS Result:', smsData);
-        if (smsData.return === true) {
-          return res.json({ success: true, message: '📱 OTP sent to your phone!' });
-        }
-      } catch (smsErr) {
-        console.log('SMS error:', smsErr.message);
-      }
+  const TWOFACTOR_KEY = process.env.TWOFACTOR_KEY;
+if (TWOFACTOR_KEY) {
+  try {
+    const smsRes = await fetch(`https://2factor.in/API/V1/${TWOFACTOR_KEY}/SMS/${phone}/${otp}/OTP1`);
+    const smsData = await smsRes.json();
+    console.log('SMS Result:', smsData);
+    if (smsData.Status === 'Success') {
+      return res.json({ success: true, message: '📱 OTP sent to your phone!' });
     }
+  } catch (smsErr) {
+    console.log('SMS error:', smsErr.message);
+  }
+}
     res.json({ success: true, message: 'OTP sent!', ...(process.env.NODE_ENV !== 'production' && { otp }) });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to send OTP' });
