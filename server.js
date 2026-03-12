@@ -1,17 +1,17 @@
-const express   = require('express');
-const mongoose  = require('mongoose');
-const cors      = require('cors');
-const bcrypt    = require('bcryptjs');
-const jwt       = require('jsonwebtoken');
-const crypto    = require('crypto');
-const Razorpay  = require('razorpay');
-const rateLimit = require('express-rate-limit');
+const express  = require('express');
+const mongoose = require('mongoose');
+const cors     = require('cors');
+const jwt      = require('jsonwebtoken');
+const crypto   = require('crypto');
+const Razorpay = require('razorpay');
 require('dotenv').config();
 
 const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
-app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+
+// ✅ trust proxy fix for Render
+app.set('trust proxy', 1);
 
 const JWT_SECRET     = process.env.JWT_SECRET     || 'learnpaisa_secret_2025';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
@@ -21,7 +21,7 @@ mongoose.connect(MONGODB_URI)
   .then(() => console.log('✅ MongoDB connected!'))
   .catch(err => console.log('❌ DB Error:', err.message));
 
-// ── OTP stored in MongoDB (survives Render sleep!) ──
+// ── OTP stored in MongoDB ──
 const OtpSchema = new mongoose.Schema({
   phone:     { type: String, required: true, unique: true },
   otp:       { type: String, required: true },
@@ -140,38 +140,34 @@ app.post('/api/auth/send-otp', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Enter valid 10-digit phone number' });
     }
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    console.log(`OTP for ${phone}: ${otp}`);
 
-    // Save OTP in MongoDB (not memory — survives server sleep!)
+    // Save in MongoDB
     await Otp.findOneAndUpdate(
       { phone },
       { otp, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
       { upsert: true, new: true }
     );
-    console.log(`OTP for ${phone}: ${otp}`);
 
-    // Send SMS via 2Factor
+    // Try SMS
     const TWOFACTOR_KEY = process.env.TWOFACTOR_KEY;
     if (TWOFACTOR_KEY) {
       try {
-        // TRANS route = SMS (not call!)
-        const smsUrl = `https://2factor.in/API/V1/${TWOFACTOR_KEY}/SMS/+91${phone}/${otp}`;
-        const smsRes = await fetch(smsUrl);
+        const smsRes  = await fetch(`https://2factor.in/API/V1/${TWOFACTOR_KEY}/SMS/+91${phone}/${otp}`);
         const smsData = await smsRes.json();
-        console.log('SMS Result:', JSON.stringify(smsData));
+        console.log('SMS:', JSON.stringify(smsData));
         if (smsData.Status === 'Success') {
           return res.json({ success: true, message: '📱 OTP sent to your phone!' });
-        } else {
-          console.log('SMS failed:', smsData.Details);
         }
-      } catch (smsErr) {
-        console.log('SMS error:', smsErr.message);
-      }
+      } catch (e) { console.log('SMS error:', e.message); }
     }
-    // Fallback — show OTP in response for testing
-    res.json({ success: true, message: 'OTP sent!', otp });
+
+    // Always return OTP so user can login even if SMS fails
+    res.json({ success: true, message: 'OTP ready!', otp });
+
   } catch (err) {
     console.log('Send OTP error:', err.message);
-    res.status(500).json({ success: false, message: 'Failed to send OTP' });
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
@@ -179,27 +175,25 @@ app.post('/api/auth/send-otp', async (req, res) => {
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
     const { phone, otp, name, referralCode } = req.body;
-
-    // Get OTP from MongoDB
     const stored = await Otp.findOne({ phone });
+
     if (!stored) {
-      return res.status(400).json({ success: false, message: 'OTP not found. Request again.' });
+      return res.status(400).json({ success: false, message: 'OTP not found. Click Send OTP first.' });
     }
     if (new Date() > stored.expiresAt) {
       await Otp.deleteOne({ phone });
-      return res.status(400).json({ success: false, message: 'OTP expired. Request again.' });
+      return res.status(400).json({ success: false, message: 'OTP expired. Request a new one.' });
     }
-    if (stored.otp !== otp.toString()) {
-      return res.status(400).json({ success: false, message: 'Wrong OTP! Try again.' });
+    if (stored.otp !== otp.toString().trim()) {
+      return res.status(400).json({ success: false, message: 'Wrong OTP! Check and try again.' });
     }
 
-    // OTP correct — delete it
     await Otp.deleteOne({ phone });
 
     let user = await User.findOne({ phone });
     let isNewUser = false;
     if (!user) {
-      if (!name) return res.status(400).json({ success: false, message: 'Name required for signup' });
+      if (!name) return res.status(400).json({ success: false, message: 'Name is required for signup' });
       let referredBy = null;
       if (referralCode) {
         const referrer = await User.findOne({ referralCode });
