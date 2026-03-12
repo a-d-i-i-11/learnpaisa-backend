@@ -443,3 +443,42 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => { console.log(`🚀 LearnPaisa Backend running on port ${PORT}`); });
+
+// ── TRIVIA RESULT (bot match prize credit) ──
+app.post('/api/game/trivia-result', authMiddleware, async (req, res) => {
+  try {
+    const { entryFee, won, myScore, botScore } = req.body;
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const fee = parseInt(entryFee) || 0;
+    user.stats.matchesPlayed = (user.stats.matchesPlayed || 0) + 1;
+
+    if (won) {
+      const prize = Math.round(fee * 2 * 0.85);
+      user.wallet.winnings = (user.wallet.winnings || 0) + prize;
+      user.wallet.total    = (user.wallet.total    || 0) + prize;
+      user.stats.matchesWon   = (user.stats.matchesWon   || 0) + 1;
+      user.stats.totalEarned  = (user.stats.totalEarned  || 0) + prize;
+      user.stats.currentStreak= (user.stats.currentStreak|| 0) + 1;
+      user.stats.xp           = (user.stats.xp           || 0) + fee * 2;
+      user.stats.level        = Math.floor(user.stats.xp / 500) + 1;
+      // Deduct entry fee (player paid to play)
+      user.wallet.total    -= fee;
+      await user.save();
+      await Transaction.create({ user: req.userId, type: 'winning', amount: prize, status: 'completed', note: `Trivia win vs bot. Score: ${myScore}-${botScore}` });
+      return res.json({ success: true, message: `🏆 ₹${prize} credited!`, newBalance: user.wallet.total });
+    } else {
+      // Lost — deduct entry fee
+      if (user.wallet.total < fee) return res.status(400).json({ success: false, message: 'Insufficient balance' });
+      user.wallet.total -= fee;
+      user.stats.currentStreak = 0;
+      await user.save();
+      await Transaction.create({ user: req.userId, type: 'loss', amount: fee, status: 'completed', note: `Trivia loss vs bot. Score: ${myScore}-${botScore}` });
+      return res.json({ success: true, message: 'Match recorded.', newBalance: user.wallet.total });
+    }
+  } catch(err) {
+    console.log('Trivia result error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
